@@ -13,12 +13,50 @@
 			(-> ~data (assoc-in ~keys ~ele)
 				(update-in ~keys ~op ~@args))))
 
+(defn dissoc-in-using 
+	[ data keys op & keys-to-remove ]
+		(if (seq keys)
+			(reduce #(assoc-in %1 keys 
+				(op (get-in %1 keys) %2)) data keys-to-remove)  
+			(apply op data keys-to-remove)))
+
+;(disj #{ 1 2 } 2 1)
+;
+;(dissoc-in-using { 1 { 2 #{ 3 4 } } }  [ 1 2 ] disj 4 3)
+
 (defn insert[ record ]
 	(dosync 
-		(let[ id (count (get @*data* *context*)) ]
-			(doseq[ [key val] record ]
-				(alter *data* assoc-in [*context* id ] record)
+		(let[ id (or (get record :_id) (count (get @*data* *context*))) 
+				new-record (assoc record :_id id) ]
+			(doseq[ [key val] new-record ]
+				(alter *data* assoc-in [*context* id ] new-record)
 				(alter *index* #(update-in-using %1  [*context* key val] #{} conj id))))))
+
+(defn delete[ id ]
+	(dosync 
+		(let[ record (get-in @*data* [*context* id]) ]
+			(doseq[ [k v] record ]
+				(alter *index* dissoc-in-using [*context* k v] disj id)
+				(alter *index* (fn[ data] (if (empty? (get-in data [*context* k v]))
+					(dissoc-in-using data [*context* k] dissoc v)
+						data)))
+
+					)
+			(alter *data* dissoc-in [*context* ] id) )))
+
+;(from :perm
+;	(insert { :ala "hej" :kot "w" })
+;	(insert { :ala "bej" :kot "w" }))
+;
+;(from :perm
+;	(select (where { :ala "hej"})))
+;
+;(from :perm
+;	(delete 0))
+;
+;(println @*data*)
+;(println @*index*)
+;
 
 (defmacro from[ name & body ]
 	`(binding[ *context* ~name ]
@@ -33,7 +71,7 @@
 			(select ids) keys))))
 
 (defn where[ query ]
-	(let[ r (filter identity (map (fn[ [key val] ]
+	(let[ r (filter (fn[x] (if (nil? x) (list) x)) (map (fn[ [key val] ]
 			(clojure.set/union (get-in @*index* [*context* key val]) 
 				(or (get-in @*index* [*context* key any]) #{}) )) query)) ]
 		(if (seq r)
@@ -64,9 +102,9 @@
 ;
 
 (defn permission[ roles ops states ]
-	(letfn [ (or-nil [ a ] (or a #{ nil })) ]
+	(letfn [ (or-any [ a ] (or a #{ any })) ]
 		(from :permission
-			(doseq[ r (or-nil roles) o (or-nil ops) s (or-nil states) ]
+			(doseq[ r (or-any roles) o (or-any ops) s (or-any states) ]
 				(insert { :role r :op o :state s })))))
 
 (permission #{:admin :operator } #{:reject :accept} #{:applied} )
